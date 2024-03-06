@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TypeVar, Generic, TypeVarTuple, Callable as Fn, ParamSpec
-import functools
+
 
 P = ParamSpec("P")
 Ts = TypeVarTuple("Ts")
@@ -24,36 +24,34 @@ class Data(Generic[*Ts]):
     def and_then(self, f: Fn[[*Ts], Data[*Rs]]) -> Data[*Rs]:
         return f(*self.data)
 
+    def switch(self, f: Fn[[*Ts], R]) -> R:
+        """
+        Leave the Data monad through a call to f.
+
+        This can be convinient when you want to continue with another monad,
+        where you would otherwise need to call .data or .value to extract the
+        data and then start a separate monad.
+        """
+        return f(*self.data)
+
 
 def data(*x: *Ts) -> Data[*Ts]:
     return Data(x)
 
 
 @dataclass(frozen=True)
-class transform(Generic[P, R]):
+class transform(Generic[P, *Rs]):
     """Monad of functions with function composition."""
 
-    fn: Fn[P, R]
+    fn: Fn[P, Data[*Rs]]
 
-    def and_then(
-        self: transform[P, Data[*Ts]],
-        f: Fn[[*Ts], Data[*Rs]],
-    ) -> transform[P, Data[*Rs]]:
-        def wrap(*args: P.args, **kwargs: P.kwargs) -> Data[*Rs]:
-            x = self.fn(*args, **kwargs).data
-            return f(*x)
+    def and_then(self, f: Fn[[*Rs], Data[*Ts]]) -> transform[P, *Ts]:
+        def wrap(*args: P.args, **kwargs: P.kwargs) -> Data[*Ts]:
+            return self.fn(*args, **kwargs).and_then(f)
 
         return transform(wrap)
 
-    def and_then_lift(
-        self: transform[P, Data[*Ts]],
-        f: Fn[[*Ts], tuple[*Rs]],
-    ) -> transform[P, Data[*Rs]]:
-        return self.and_then(lift_func(f))
-
-    def __call__(
-        self: transform[P, Data[*Rs]], *args: P.args, **kwargs: P.kwargs
-    ) -> Data[*Rs]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Data[*Rs]:
         return self.fn(*args, **kwargs)
 
 
@@ -72,21 +70,14 @@ def bar(x: int, y: float, z: str) -> Data[int, float, str]:
     return data(2 + x, y / 4, z + "bar")
 
 
-baz = foo.and_then(bar).and_then(bar).and_then(lambda x, y, z: data(z))
+baz = (
+    foo.and_then(bar)
+    .and_then(bar)
+    .and_then(lambda x, y, z: data(-x, -y, z))
+    .and_then(bar)
+    .and_then(foo)
+)
 
 print(baz(1, 2.0, "3"))
 print(x.and_then(baz))
-
-
-def lift_func(f: Fn[P, tuple[*Rs]]) -> transform[P, Data[*Rs]]:
-    @functools.wraps(f)
-    def wrap(*args: P.args, **kwargs: P.kwargs) -> Data[*Rs]:
-        return data(*f(*args, **kwargs))
-
-    return transform(wrap)
-
-
-xx = data(x.and_then(lambda x, y, z: data(y))), x.and_then(
-    lambda x, y, z: data(z),
-)
-print(xx)
+print(x.and_then(lambda x, y, z: data(z)).value)
